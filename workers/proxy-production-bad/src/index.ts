@@ -1,6 +1,15 @@
 interface Env {
   TENANTS: KVNamespace;
   APP_WORKER_URL: string;
+  APP_WORKER_NEXT_URL: string;
+}
+
+type Backend = "plain" | "next";
+
+function pickBackendUrl(env: Env, backend: Backend): { url: string; service: string } {
+  return backend === "next"
+    ? { url: env.APP_WORKER_NEXT_URL, service: "app-region-1-next" }
+    : { url: env.APP_WORKER_URL, service: "app-region-1" };
 }
 
 export default {
@@ -16,10 +25,13 @@ export default {
     const downstreamPath = url.searchParams.get("path") ?? "/api/catalog";
     const sizeParam = url.searchParams.get("size");
     const queryString = sizeParam ? `?size=${sizeParam}` : "";
+    const backend: Backend = url.searchParams.get("backend") === "next" ? "next" : "plain";
+
+    const { url: appWorkerUrl, service } = pickBackendUrl(env, backend);
 
     const started = Date.now();
     const upstream = await fetch(
-      `${env.APP_WORKER_URL}${downstreamPath}${queryString}`,
+      `${appWorkerUrl}${downstreamPath}${queryString}`,
       { headers: { host: `${tenant}.internal` } },
     );
     const elapsedMs = Date.now() - started;
@@ -39,6 +51,8 @@ export default {
     return Response.json({
       proxy: "proxy-production-bad",
       transport: "public fetch() (cross-zone)",
+      backend,
+      backendService: service,
       outsideHost,
       tenant,
       downstreamPath,

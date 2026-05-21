@@ -8,10 +8,13 @@
   ],
   "scripts": {
     "dev:app": "npm --workspace workers/app-region-1 run dev",
+    "dev:app-next": "npm --workspace workers/app-region-1-next run dev",
     "dev:bad": "npm --workspace workers/proxy-production-bad run dev",
     "dev:good": "npm --workspace workers/proxy-production-good run dev",
     "dev:router": "npm --workspace workers/demo-router run dev",
-    "deploy:all": "npm --workspace workers/app-region-1 run deploy && npm --workspace workers/proxy-production-bad run deploy && npm --workspace workers/proxy-production-good run deploy && npm --workspace workers/demo-router run deploy",
+    "build:app-next": "npm --workspace workers/app-region-1-next run build",
+    "deploy:app-next": "npm --workspace workers/app-region-1-next run deploy",
+    "deploy:all": "npm --workspace workers/app-region-1 run deploy && npm --workspace workers/app-region-1-next run deploy && npm --workspace workers/proxy-production-bad run deploy && npm --workspace workers/proxy-production-good run deploy && npm --workspace workers/demo-router run deploy",
     "private:on": "node scripts/toggle-private.mjs on && npm --workspace workers/app-region-1 run deploy",
     "private:off": "node scripts/toggle-private.mjs off && npm --workspace workers/app-region-1 run deploy",
     "private:status": "node scripts/toggle-private.mjs status"

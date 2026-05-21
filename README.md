@@ -1,4 +1,13 @@
-# no-cross-zone-worker-sub-requests
+# no-cross-zone-worker-sub-requests &mdash; `nextjs` branch
+
+> **You are on the `nextjs` branch.** This branch adds a Next.js +
+> OpenNext companion worker (`app-region-1-next`) alongside the plain
+> Worker `app-region-1`, and wires both proxies and the demo-router to
+> exercise either backend. The point is to empirically answer the
+> meeting's open questions about Service Bindings + Next.js. See
+> [`NEXTJS.md`](./NEXTJS.md) for the full walkthrough and observed
+> behavior. The base architecture below is otherwise unchanged from
+> `main`.
 
 A minimum-viable reference architecture for eliminating cross-zone Worker
 sub-request billing in a Cloudflare-for-SaaS multi-tenant topology.

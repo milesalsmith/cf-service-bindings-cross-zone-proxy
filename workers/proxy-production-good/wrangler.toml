@@ -10,6 +10,14 @@ workers_dev = true
 binding = "APP_REGION_1"
 service = "app-region-1"
 
+# Second binding to the OpenNext / Next.js variant of the same worker.
+# Demonstrates that a Next.js app deployed via @opennextjs/cloudflare can
+# be the callee of a Service Binding -- the producer side of Andrew's
+# open question from the meeting notes.
+[[services]]
+binding = "APP_REGION_1_NEXT"
+service = "app-region-1-next"
+
 [[kv_namespaces]]
 binding = "TENANTS"
 id = "<your-tenants-kv-namespace-id>"

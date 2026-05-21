@@ -8,6 +8,10 @@ workers_dev = true
 # fetch takes the public-internet path.
 [vars]
 APP_WORKER_URL = "https://app-region-1.<your-subdomain>.workers.dev"
+# Mirror anti-pattern targeting the Next.js / OpenNext variant. Same
+# billing characteristics: leaves the runtime, re-enters the edge,
+# response bytes counted as Data Transfer.
+APP_WORKER_NEXT_URL = "https://app-region-1-next.<your-subdomain>.workers.dev"
 
 [[kv_namespaces]]
 binding = "TENANTS"
