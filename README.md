@@ -1,4 +1,4 @@
-# no-cross-zone-worker-sub-requests
+# cf-service-bindings-cross-zone-proxy
 
 A minimum-viable reference architecture for eliminating cross-zone Worker
 sub-request billing in a Cloudflare-for-SaaS multi-tenant topology.
