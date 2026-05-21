@@ -1,29 +1,20 @@
 // /api/whoami -- diagnostic endpoint that echoes everything observable
-// about the inbound request: parsed URL components, every header the
-// callee sees, and the cf object when present.
+// about the inbound request: the parsed URL (from BOTH request.url and
+// the x-opennext-initial-url header so the difference is visible),
+// every header the callee sees, and the cf object when present.
 //
-// This exists specifically to answer Andrew's open question from the
-// meeting notes:
-//   "Can the host name still be sent and received by the target worker
-//    when using a service binding?"
-//
-// The proxy will call:
-//   env.APP_REGION_1_NEXT.fetch("https://${tenant}.internal/api/whoami")
-// and the response will show:
-//   - hostname:       ${tenant}.internal       (the binding-supplied host)
-//   - headers.host:   <whatever Next/OpenNext surfaces>
-//   - arrivedVia:     "service binding"        (no cf-connecting-ip)
-//
-// Read this against the same call going through proxy-production-bad,
-// where hostname will be the workers.dev URL and cf-connecting-ip will
-// be set, to see the difference between the two transports concretely.
+// This exists to make OpenNext's host-rewrite behavior empirically
+// observable. See NEXTJS.md ("OpenNext host rewrite") for context.
 
 import { NextRequest } from "next/server";
+import { getInboundUrl } from "@/lib/inbound-url";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest) {
-  const url = new URL(request.url);
+  const rawUrl = new URL(request.url);
+  const inboundUrl = getInboundUrl(request);
+
   const headers: Record<string, string> = {};
   request.headers.forEach((value, key) => {
     headers[key] = value;
@@ -37,19 +28,30 @@ export async function GET(request: NextRequest) {
     service: "app-region-1-next",
     runtime: "next.js on opennext/cloudflare",
     arrivedVia,
-    parsedUrl: {
-      href: url.href,
-      protocol: url.protocol,
-      hostname: url.hostname,
-      pathname: url.pathname,
-      search: url.search,
+    // What Next.js's request.url shows directly. Under OpenNext, the
+    // host is rewritten to "undefined" before this handler runs.
+    rawRequestUrl: {
+      href: rawUrl.href,
+      hostname: rawUrl.hostname,
+      pathname: rawUrl.pathname,
+      search: rawUrl.search,
     },
-    derivedTenant: url.hostname.split(".")[0],
+    // What the caller actually wrote. Recovered from the
+    // x-opennext-initial-url header when present (binding path), or
+    // from request.url when the header is absent (public edge / dev).
+    inboundUrl: {
+      href: inboundUrl.href,
+      hostname: inboundUrl.hostname,
+      pathname: inboundUrl.pathname,
+      search: inboundUrl.search,
+    },
+    derivedTenant: inboundUrl.hostname.split(".")[0],
     headerCount: Object.keys(headers).length,
     headers,
     note:
-      "If arrivedVia is 'service binding', parsedUrl.hostname is whatever the " +
-      "caller wrote (e.g. 'tenant-b.internal'), proving the host portion is " +
-      "delivered to the Next.js callee intact.",
+      "Under a Service Binding to an OpenNext Next.js worker, request.url " +
+      "is rewritten to 'https://undefined/...'. The original URL is on " +
+      "x-opennext-initial-url. Use that header (or the getInboundUrl helper) " +
+      "for any host-based logic in Next.js route handlers.",
   });
 }

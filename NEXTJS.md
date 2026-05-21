@@ -96,56 +96,166 @@ branches on which env property is set.
 
 ### Q3: Does the host name survive the binding?
 
-**Yes.** The caller is free to set the URL's host portion to anything;
-the runtime delivers it intact to the callee on `request.url`. The
-Next.js callee parses it with a standard `new URL(request.url)`.
+**Yes -- but with a real OpenNext-specific caveat that we discovered
+only by running this end-to-end.** This is the most important finding
+from the live test.
 
-This branch makes the claim observable. `/api/whoami` returns:
+#### The short version
+
+- A plain Worker callee sees `request.url` set to whatever the caller
+  passed to `env.MY_BINDING.fetch(...)`, including the host portion.
+  `new URL(request.url).hostname` returns the caller's host. Confirmed
+  on `app-region-1`.
+- A Next.js callee on OpenNext sees `request.url === "https://undefined/..."`
+  and `request.headers.get("host") === "undefined"`. The Next.js
+  request object does not get the caller's host directly.
+- The original URL the caller wrote IS preserved, on an
+  `x-opennext-initial-url` header set by OpenNext. Pathname and query
+  string survive on `request.url` untouched.
+
+Use the helper `src/lib/inbound-url.ts` (or read the
+`x-opennext-initial-url` header yourself) any time you need the
+caller-supplied host inside a Next.js route handler on OpenNext.
+`request.url` alone is not enough.
+
+#### What we actually observed
+
+`/api/whoami` returns both views side-by-side so the difference is
+self-documenting. Sample response over a Service Binding, with the
+caller passing `https://tenant-c.internal/api/whoami`:
 
 ```jsonc
 {
   "service": "app-region-1-next",
   "runtime": "next.js on opennext/cloudflare",
   "arrivedVia": "service binding",
-  "parsedUrl": {
-    "hostname": "tenant-b.internal",        // <- caller wrote this; delivered intact
+  "rawRequestUrl": {
+    "href": "https://undefined/api/whoami",   // <- Next.js sees this
+    "hostname": "undefined",
     "pathname": "/api/whoami",
     "search": ""
   },
-  "derivedTenant": "tenant-b",
-  "headers": { /* every header the Next.js route handler sees */ }
+  "inboundUrl": {
+    "href": "https://tenant-c.internal/api/whoami",  // <- from getInboundUrl()
+    "hostname": "tenant-c.internal",
+    "pathname": "/api/whoami",
+    "search": ""
+  },
+  "derivedTenant": "tenant-c",
+  "headers": {
+    "host": "undefined",
+    "x-forwarded-host": "undefined",
+    "x-opennext-initial-url": "https://tenant-c.internal/api/whoami",
+    // ... other OpenNext bookkeeping headers ...
+  }
 }
 ```
 
-Compare against hitting the same handler via `proxy-production-bad`,
-which goes over the public edge: `arrivedVia` becomes `"public edge"`,
-`parsedUrl.hostname` reflects the public `workers.dev` URL, and
-`cf-connecting-ip` is set. That diff is the single clearest before/after
-for the binding model.
+`rawRequestUrl.hostname === "undefined"`. `inboundUrl.hostname === "tenant-c.internal"`.
 
-## What was validated locally on this branch
+#### How `getInboundUrl()` works
 
-The full Next.js + OpenNext build chain was executed end-to-end before
-this branch was pushed:
+```ts
+// workers/app-region-1-next/src/lib/inbound-url.ts
+export function getInboundUrl(request: Request): URL {
+  const opennextInitialUrl = request.headers.get("x-opennext-initial-url");
+  if (opennextInitialUrl) {
+    return new URL(opennextInitialUrl);
+  }
+  return new URL(request.url);
+}
+```
 
-1. `npm install` -- installs Next.js 15, React 18, `@opennextjs/cloudflare`,
-   and `@cloudflare/workers-types` in the new workspace.
-2. `npm --workspace workers/app-region-1-next run build` -- runs `next build`.
-   Both route handlers are correctly recognised as `ƒ Dynamic` (server-rendered
-   on demand), which is required for them to be reachable via a Service
-   Binding.
-3. `npx opennextjs-cloudflare build` -- produces `.open-next/worker.js`.
-   Reports "OpenNext build complete" with no errors.
-4. `wrangler deploy --dry-run` on each plain Worker -- confirms that
-   `proxy-production-good`'s bindings now include both
-   `APP_REGION_1: app-region-1` and `APP_REGION_1_NEXT: app-region-1-next`,
-   and that `proxy-production-bad` has both `APP_WORKER_URL` and
-   `APP_WORKER_NEXT_URL` set.
+The route handlers use it like this:
 
-Actual deployment to your account requires you to fill in the placeholders
-(KV namespace id, `workers.dev` subdomain) and run `npm run deploy:all`.
-The deploy order is encoded in the script so bindings validate at deploy
-time:
+```ts
+// workers/app-region-1-next/src/app/api/catalog/route.ts
+const url = getInboundUrl(request);
+const tenant = url.hostname.split(".")[0];
+```
+
+This is the only line of code in this branch that has to differ from
+the equivalent plain Worker. Everything else -- the proxy's
+wrangler.toml, the `[[services]]` block, the path/query forwarding,
+the api-client adapter -- is identical.
+
+#### Practical consequence for the customer migration
+
+Any Next.js application that does host-based tenant resolution from
+`request.url`, `headers.host`, or `headers["x-forwarded-host"]` will
+silently produce the wrong tenant the moment it's called over a Service
+Binding under OpenNext. There is no error; you get whatever
+`"undefined".split(".")[0]` produces.
+
+Migration checklist for a real customer:
+
+1. Grep the Next.js app for `request.url`, `headers.host`,
+   `headers["x-forwarded-host"]`, `headers.get("host")`,
+   `getRequestHeaders` host reads, and anywhere `hostname` is derived
+   from the incoming request.
+2. At each of those sites, prefer the
+   `x-opennext-initial-url` header when present, falling back to
+   `request.url` for the public-edge / `next dev` case.
+3. A single small helper (`getInboundUrl(request)`) keeps the change
+   surface small and centralizes the OpenNext-specific behavior.
+
+#### Was this documented anywhere?
+
+Not that we found in the [OpenNext Cloudflare get-started
+guide](https://opennext.js.org/cloudflare/get-started). The
+`x-opennext-initial-url` header is observable by inspection, and the
+header naming makes the intent reasonably clear, but the behavior is
+not called out in the docs we read while building this branch. This
+branch's `/api/whoami` route is the recipe for verifying it on any
+account.
+
+#### Anti-pattern proxy + Next.js callee: error 1042
+
+`/bad-next` (the same-account public fetch from `proxy-production-bad`
+to `app-region-1-next.workers.dev`) returns Cloudflare **error 1042**
+("same-account public-hostname loop refused"). This is the same
+behavior the meeting notes describe when the customer attempted to
+move the workers to the same zone. It is not specific to the Next.js
+worker; the plain `app-region-1` exhibits the same behavior on
+`/bad`. The binding path bypasses 1042 entirely because the call never
+leaves the runtime.
+
+## What was validated end-to-end against a live Cloudflare account
+
+After the initial pre-push checks (`next build`, `opennextjs-cloudflare
+build`, `wrangler deploy --dry-run`), all five Workers were deployed to
+a real Cloudflare account and exercised via `curl`. Findings, all
+observed in the response bodies:
+
+| Check | Result |
+|---|---|
+| `/?backend=plain` -- plain Worker callee via binding | `goodDataTransferBilledBytes: 0`, `tenantSeenByGood: "tenant-b"`, `arrivedViaGood: "service binding"` |
+| `/?backend=next` -- Next.js callee via binding | Same binding mechanics. **Initially returned `tenant: "undefined"`**; fixed via `getInboundUrl()` helper (see Q3). |
+| `/?size=256` -- 256 KB payload through binding | `upstreamBytes: 262273`, `dataTransferBilledBytes: 0` |
+| `/good-next?path=/api/whoami` | Confirmed `request.url` host rewrite to `"undefined"`; `x-opennext-initial-url` header preserves the real URL. |
+| `/bad-next?path=/api/whoami` | Cloudflare error 1042 (expected -- same-account public-hostname loop). |
+| `npm run private:on` -> direct hit to callee | HTTP 404 (worker is off the public internet). |
+| `npm run private:on` -> via `proxy-production-good` | HTTP 200, tenant correctly resolved, zero data transfer billed. The binding does not need the callee to be public. |
+| `npm run private:on` -> via `proxy-production-bad` | Error 1042 / 16-byte error page. The anti-pattern stops working. |
+
+The "Initially returned `tenant: 'undefined'`" row is the discovery the
+in-session live test was worth doing for. The published code already
+applies the fix.
+
+#### Reproducing locally
+
+Local-only wrangler overrides go in `wrangler.local.toml` or
+`wrangler.local.jsonc` next to each existing wrangler config file.
+These files are in `.gitignore` and never reach the public repo. They
+hold the real KV namespace id, your `workers.dev` subdomain, and the
+account id you want to deploy under. Deploy with:
+
+```bash
+export CLOUDFLARE_ACCOUNT_ID=<your-account-id>
+npx wrangler deploy --config workers/<worker-name>/wrangler.local.toml
+```
+
+Deploy order matters and is encoded in `deploy:all`:
 
 1. `app-region-1`
 2. `app-region-1-next`  (this branch)
@@ -182,19 +292,19 @@ curl -s "https://demo-router.<your-subdomain>.workers.dev/?backend=next" | jq '.
 curl -s "https://demo-router.<your-subdomain>.workers.dev/good-next" | jq '.body'
 curl -s "https://demo-router.<your-subdomain>.workers.dev/bad-next"  | jq '.body'
 
-# Andrew's host-forwarding diagnostic, going through the binding
+# Host-forwarding diagnostic, going through the binding
 curl -s "https://demo-router.<your-subdomain>.workers.dev/good-next?path=/api/whoami&host=tenant-b.saas.example.com" \
-  | jq '.body.upstream.parsedUrl, .body.upstream.derivedTenant, .body.upstream.arrivedVia'
+  | jq '.body.upstream | {arrivedVia, rawRequestUrl, inboundUrl, derivedTenant}'
 
-# Same diagnostic, going over the public edge
-curl -s "https://demo-router.<your-subdomain>.workers.dev/bad-next?path=/api/whoami&host=tenant-b.saas.example.com" \
-  | jq '.body.upstream.parsedUrl, .body.upstream.derivedTenant, .body.upstream.arrivedVia'
+# Compare what raw Next.js sees vs what the helper recovers
+#   rawRequestUrl.hostname === "undefined"           (OpenNext rewrites this)
+#   inboundUrl.hostname    === "tenant-b.internal"   (recovered from x-opennext-initial-url)
+#   derivedTenant          === "tenant-b"
 ```
 
-The second-to-last call returns `arrivedVia: "service binding"` and
-`hostname: "tenant-b.internal"`. The last call returns
-`arrivedVia: "public edge"` and `hostname` set to whatever
-`workers.dev` URL was used. That's the proof Andrew asked for.
+The same call over `bad-next` will return Cloudflare error 1042 in the
+upstream body because of same-account loop detection -- expected, and
+consistent with the meeting-notes story.
 
 ## When to merge this into `main` vs. keep it separate
 
@@ -205,13 +315,21 @@ My judgement: keep it as a long-lived branch, not a merge target. Reasons:
   build pipeline triples the install size and adds two more moving
   pieces (Next.js dev server, OpenNext bundler) to understand before
   the reader gets to the binding lesson.
+- The branch carries one piece of OpenNext-specific code
+  (`getInboundUrl`) that is *not* needed on `main`. Putting it on
+  `main` would either pollute the plain-Worker example or get hidden
+  behind a runtime check; both are worse than having a separate branch
+  where it belongs.
 - The branch is permanently linkable as a self-contained answer to
-  "does this pattern work in Next.js?" without making everyone who
-  lands on the repo wade through Next.js to learn about Service Bindings.
-- If OpenNext's API changes (it's pre-1.x), the plain-Worker `main`
-  keeps working untouched, and this branch can be updated independently.
+  "does this pattern work in Next.js, and what are the gotchas?"
+  without making everyone who lands on the repo wade through Next.js
+  to learn about Service Bindings.
+- If OpenNext changes how it handles the inbound host (e.g. starts
+  preserving `request.url`), the plain-Worker `main` is unaffected and
+  this branch can be updated independently.
 
-If a future use case demands Next.js as the *primary* reference (e.g.,
+If a future use case demands Next.js as the *primary* reference (e.g.
 a customer who only ships Next.js), the right move is to publish this
-branch as its own repo (e.g. `cf-service-bindings-cross-zone-proxy-nextjs`)
-rather than absorb it into `main`.
+branch as its own repo (e.g.
+`cf-service-bindings-cross-zone-proxy-nextjs`) rather than absorb it
+into `main`.

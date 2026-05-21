@@ -60,8 +60,11 @@ if (already) {
   process.exit(0);
 }
 
+// Preserve the file's trailing newline (if any) since some replacement
+// paths can strip it when match[0] sits at end-of-file.
 const updated = original.replace(match[0], `${match[1]}${want}`);
-writeFileSync(target, updated);
+const finalText = original.endsWith("\n") && !updated.endsWith("\n") ? updated + "\n" : updated;
+writeFileSync(target, finalText);
 console.log(
   `app-region-1 workers_dev: ${match[2]} -> ${want}  ` +
     `(now ${mode === "on" ? "PRIVATE, binding-only" : "PUBLIC on workers.dev"}).`,

@@ -2,23 +2,24 @@
 // /api/catalog route. The proxy calls
 //   env.APP_REGION_1_NEXT.fetch("https://${tenant}.internal/api/catalog?size=KB")
 // and this handler:
-//   - parses the tenant from request.url's hostname,
+//   - parses the tenant from the inbound URL's hostname,
 //   - returns a controllable-size JSON payload,
 //   - reports whether the request arrived via the public edge or a
 //     Service Binding (via the cf-connecting-ip header heuristic).
 //
-// This is the empirical answer to Andrew's first action item:
-// "Is it possible to set up a service binding target/producer within a
-// Next.js application for the proxy worker to connect to?"
-// Yes -- a Next.js route handler running on OpenNext receives the
-// binding-supplied request like any other, including the caller's host.
+// Why getInboundUrl(request) and not new URL(request.url):
+// see workers/app-region-1-next/src/lib/inbound-url.ts. OpenNext
+// rewrites request.url to https://undefined/... before this handler
+// runs. The caller-supplied URL is on the x-opennext-initial-url
+// header. The helper picks the right source.
 
 import { NextRequest } from "next/server";
+import { getInboundUrl } from "@/lib/inbound-url";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest) {
-  const url = new URL(request.url);
+  const url = getInboundUrl(request);
   const tenant = url.hostname.split(".")[0];
   const arrivedVia = request.headers.has("cf-connecting-ip")
     ? "public edge"

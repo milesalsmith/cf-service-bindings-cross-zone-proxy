@@ -9,3 +9,8 @@ dist/
 .open-next/
 next-env.d.ts
 cloudflare-env.d.ts
+# Local-only wrangler overrides containing real account-specific
+# values (KV ids, workers.dev subdomains, account_id). Never commit.
+wrangler.local.toml
+wrangler.local.jsonc
+.env.deploy
