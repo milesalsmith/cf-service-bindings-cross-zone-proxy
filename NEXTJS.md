@@ -209,16 +209,42 @@ not called out in the docs we read while building this branch. This
 branch's `/api/whoami` route is the recipe for verifying it on any
 account.
 
-#### Anti-pattern proxy + Next.js callee: error 1042
+#### Anti-pattern proxy + Next.js callee: error 1042 (and why it is not the protection it looks like)
 
 `/bad-next` (the same-account public fetch from `proxy-production-bad`
 to `app-region-1-next.workers.dev`) returns Cloudflare **error 1042**
 ("same-account public-hostname loop refused"). This is the same
 behavior the meeting notes describe when the customer attempted to
 move the workers to the same zone. It is not specific to the Next.js
-worker; the plain `app-region-1` exhibits the same behavior on
-`/bad`. The binding path bypasses 1042 entirely because the call never
-leaves the runtime.
+worker; the plain `app-region-1` exhibits the same behavior on `/bad`.
+The binding path bypasses 1042 entirely because the call never leaves
+the runtime.
+
+**Important to communicate to the customer:** 1042 is a platform safety
+net for one specific misconfiguration, not a billing protection. Read
+the table below before assuming a healthy bill means a healthy
+architecture.
+
+| Caller / callee shape | 1042 fires? | Billed as Data Transfer? |
+| --- | --- | --- |
+| Same account, same Worker calling itself by `workers.dev` URL | Yes | No (refused) |
+| Same account, Worker A calling Worker B by `workers.dev` URL | Yes (in our test) | No (refused) |
+| Same account, Worker A calling Worker B by a custom domain on a same-account zone | **Often no** -- depends on route configuration | **Yes**, every byte |
+| Different accounts, Worker A in account X calling Worker B in account Y | **No** | **Yes**, every byte |
+| Same account, Worker calling a non-Workers HTTPS endpoint | No | Yes, every byte |
+
+The customer's original 30 GB/hour figure existed *because* their
+architecture was in one of the "no" rows. The runtime did not stop
+them; the bill did, six months later, at renewal. If `proxy-production-bad`
+were calling `app-region-1-next` across two different Cloudflare
+accounts (same code, two `workers.dev` URLs that happened to be on
+different account ids), 1042 would not fire, the 256 KB response would
+arrive intact, and every byte would be billed.
+
+**Bottom line:** anywhere a caller Worker reaches another of your
+Workers by URL, replace it with a Service Binding -- even if 1042 is
+currently masking the cost. The binding's zero-billing property is
+independent of whether 1042 fires.
 
 ## What was validated end-to-end against a live Cloudflare account
 
@@ -305,6 +331,35 @@ curl -s "https://demo-router.<your-subdomain>.workers.dev/good-next?path=/api/wh
 The same call over `bad-next` will return Cloudflare error 1042 in the
 upstream body because of same-account loop detection -- expected, and
 consistent with the meeting-notes story.
+
+## Production migration checklist (what this branch does NOT do)
+
+This branch is an empirical answer to "do Service Bindings work with a
+Next.js callee, and what changes?" It is not a turnkey starter for a
+real customer Next.js migration. A faithful production migration needs
+a few more pieces; this section names them so the customer (and you)
+know what's in scope here vs. what to plan for separately.
+
+| Concern | Status in this repo | What a real migration needs |
+| --- | --- | --- |
+| **Service Binding mechanics** | Demonstrated end-to-end, plain Worker + Next.js callee, validated live | Just apply the pattern. Caller wrangler.toml gets `[[services]]`, caller code switches to `env.X.fetch(...)`. |
+| **Host forwarding into Next.js** | `getInboundUrl()` helper + diagnostic route. Verified live. | Identical helper or inline `request.headers.get("x-opennext-initial-url") ?? request.url`. One change, possibly at multiple call sites. |
+| **Vercel portability** | `api-client.ts` adapter (Service Binding vs HTTPS). | Same pattern; pass `getCloudflareContext().env` to the adapter from Next.js server code. |
+| **Static asset serving** | `[assets]` binding in `wrangler.jsonc`, `_headers` for cache control | Production apps will want a more involved `_headers` strategy (long-cache static, short-cache HTML, no-cache APIs). |
+| **Incremental Static Regeneration (ISR) / `revalidate`** | Not configured (no `r2IncrementalCache`) | Provision an R2 bucket, bind it as `NEXT_INC_CACHE_R2_BUCKET`, and uncomment the matching block in `open-next.config.ts`. Without this, ISR routes degrade to fetching on every request. |
+| **Image optimization (`next/image`)** | Skipped (no `[images]` binding in `wrangler.jsonc` despite `next/image`-style components nominally working) | Add `"images": { "binding": "IMAGES" }` and follow [opennext.js.org/cloudflare/howtos/image](https://opennext.js.org/cloudflare/howtos/image). |
+| **Type generation for bindings** | Manual (`@cloudflare/workers-types` imported via `tsconfig.json types[]`) | `npm run cf-typegen` writes a `cloudflare-env.d.ts` typed against the deployed binding shape. Re-run after every wrangler.toml change. |
+| **Local dev with bindings** | `next dev` works for Next.js logic but bindings simulate locally only (you don't hit real KV / R2 unless you opt into remote bindings) | For more faithful dev: `opennextjs-cloudflare preview` runs the worker bundle in workerd, or enable [experimental remote bindings](https://opennext.js.org/cloudflare/bindings#remote-bindings) for true binding fidelity. |
+| **Cache headers, edge cache, custom domains** | Out of scope -- this repo lives on `*.workers.dev` | Real deployments will attach to a zone, use `[routes]`, and likely cache assets at the edge. None of this affects the binding mechanics. |
+| **CI/CD** | `deploy:all` npm script; manual | Replace with `wrangler deploy` in your CI of choice. Deploy order matters: callees first, then proxies (binding validation happens at deploy time). |
+| **`workers_dev = false` rollout** | Toggle scripts on `main` (`private:on` / `private:off`); also exercises `app-region-1` | A real rollout takes ALL non-public callees private once binding consumers are confirmed. Workers behind bindings do not need a public URL. |
+| **Observability** | The demo emits its own JSON; no Worker Analytics Engine / Logpush wired up | A real migration probably wants per-binding latency tracking. Cloudflare Workers metrics already break out sub-requests by destination; that becomes a useful migration progress indicator. |
+| **Cross-account scenarios** | Out of scope (Service Bindings are same-account only) | If callees live in different accounts, the options are Workers for Platforms dispatch namespaces (if you own both ends) or accepting the egress as genuinely external. |
+
+None of these block adopting the Service Binding pattern, and each is
+orthogonal to the mechanics this branch demonstrates. They are listed
+here so a reader does not interpret this repo's silence on them as
+"OpenNext handles these for you" -- it doesn't.
 
 ## When to merge this into `main` vs. keep it separate
 
