@@ -303,9 +303,16 @@ the edge, over to the callee Worker, response back, billed as Data
 Transfer and as a sub-request.
 
 In the live demo, this specific fetch triggers **Cloudflare error 1042**
-because the platform detects the same-account loop. The Worker catches
-the non-JSON response and surfaces a human-readable explanation in the
-returned JSON.
+because the platform detects the same-account public-hostname loop. The
+Worker catches the non-JSON response and surfaces a human-readable
+explanation in the returned JSON.
+
+**Important framing**: 1042 is a platform safety net for one specific
+shape of same-account loop, not a billing protection. Treat it as a
+diagnostic signal -- it tells you the runtime *would have* let the
+request out onto the public edge if the loop check hadn't fired. Read
+"Why 1042 is not the protection it looks like" below before assuming a
+healthy bill means you don't have this problem.
 
 ### 4.4 `proxy-production-good` -- the recommended proxy
 
@@ -491,10 +498,41 @@ Three customer-relevant observations:
    edge.
 
 The bad side returns `error code: 1042` and a 16-byte error page,
-narrated in `upstreamError`. The counterfactual in production is the
-same architecture under a different routing config where the loop
-detection doesn't fire (e.g. cross-account) -- there, the same 256 KB
-would land on the Data Transfer line every call.
+narrated in `upstreamError`.
+
+### Why 1042 is not the protection it looks like
+
+It is tempting to read this demo's bad-side result -- 16 bytes of error
+page instead of 256 KB of payload -- as "the platform stops the bleeding."
+It does not. 1042 fires for one specific shape of misconfiguration:
+same-account, public hostname pointing back at one of your own Workers,
+loop-detectable. Several real production shapes silently *succeed* and
+bill normally:
+
+| Caller / callee shape | 1042 fires? | Billed as Data Transfer? |
+| --- | --- | --- |
+| Same account, same Worker calling itself by `workers.dev` URL | Yes | No (request refused) |
+| Same account, Worker A calling Worker B by `workers.dev` URL | Yes (in our test) | No (request refused) |
+| Same account, Worker A calling Worker B by a custom domain on a zone in the same account | **Often no** -- depends on the route configuration and host header | **Yes**, every byte |
+| Different accounts, Worker A in account X calling Worker B in account Y | **No** | **Yes**, every byte |
+| Same account, Worker calling a non-Workers HTTPS endpoint (proxy, origin, third party) | No | Yes, every byte |
+
+The customer's original 30 GB/hour Data Transfer figure existed *because*
+their architecture was in one of the "no" rows. The runtime did not stop
+them; the bill did, six months later, at renewal.
+
+Counterfactual for the live demo: if `proxy-production-bad` were calling
+`app-region-1` across two different Cloudflare accounts (same exact code,
+two `workers.dev` URLs that happened to be on different account ids), 1042
+would not fire, the 256 KB response would arrive intact, and every byte
+would be billed on the egress line. The mechanics that make the binding
+free do not depend on 1042; the mechanics that make `fetch(url)` expensive
+do not require 1042 to be absent. They are independent.
+
+In short: **treat 1042 as an accident of which-account-this-is. Service
+Bindings are the actual fix.** Anywhere a caller Worker reaches another
+of your Workers by URL, replace it -- even if 1042 is currently masking
+the cost.
 
 ---
 
