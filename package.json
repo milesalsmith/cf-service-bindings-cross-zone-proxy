@@ -1,0 +1,21 @@
+{
+  "name": "no-cross-zone-worker-sub-requests",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Side-by-side demo: avoiding cross-zone Worker sub-requests by using Service Bindings instead of public fetch().",
+  "workspaces": [
+    "workers/*"
+  ],
+  "scripts": {
+    "dev:app": "npm --workspace workers/app-region-1 run dev",
+    "dev:bad": "npm --workspace workers/proxy-production-bad run dev",
+    "dev:good": "npm --workspace workers/proxy-production-good run dev",
+    "dev:router": "npm --workspace workers/demo-router run dev",
+    "deploy:all": "npm --workspace workers/app-region-1 run deploy && npm --workspace workers/proxy-production-bad run deploy && npm --workspace workers/proxy-production-good run deploy && npm --workspace workers/demo-router run deploy"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20240725.0",
+    "typescript": "^5.5.4",
+    "wrangler": "^3.68.0"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "name": "demo-router",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev --port 8790",
+    "deploy": "wrangler deploy"
+  }
+}

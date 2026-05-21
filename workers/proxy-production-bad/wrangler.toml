@@ -1,0 +1,14 @@
+name = "proxy-production-bad"
+main = "src/index.ts"
+compatibility_date = "2024-09-23"
+workers_dev = true
+
+# Anti-pattern: the app worker's URL is just a string variable. The runtime
+# has no idea this URL points to another Worker in the same account, so the
+# fetch takes the public-internet path.
+[vars]
+APP_WORKER_URL = "https://app-region-1.<your-subdomain>.workers.dev"
+
+[[kv_namespaces]]
+binding = "TENANTS"
+id = "<your-tenants-kv-namespace-id>"

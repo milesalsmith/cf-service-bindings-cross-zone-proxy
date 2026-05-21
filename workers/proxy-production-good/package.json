@@ -1,0 +1,9 @@
+{
+  "name": "proxy-production-good",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev --port 8789",
+    "deploy": "wrangler deploy"
+  }
+}

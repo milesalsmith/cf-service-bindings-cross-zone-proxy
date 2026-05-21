@@ -1,0 +1,15 @@
+name = "proxy-production-good"
+main = "src/index.ts"
+compatibility_date = "2024-09-23"
+workers_dev = true
+
+# Recommended pattern: the app worker is declared as a Service Binding.
+# Bytes do not leave the runtime, so they are not billed as Data Transfer
+# and the call is not billed as a sub-request.
+[[services]]
+binding = "APP_REGION_1"
+service = "app-region-1"
+
+[[kv_namespaces]]
+binding = "TENANTS"
+id = "<your-tenants-kv-namespace-id>"

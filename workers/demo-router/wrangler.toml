@@ -1,0 +1,12 @@
+name = "demo-router"
+main = "src/index.ts"
+compatibility_date = "2024-09-23"
+workers_dev = true
+
+[[services]]
+binding = "BAD"
+service = "proxy-production-bad"
+
+[[services]]
+binding = "GOOD"
+service = "proxy-production-good"
