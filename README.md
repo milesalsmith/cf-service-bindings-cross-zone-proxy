@@ -283,10 +283,29 @@ validated at deploy time):
 2. `proxy-production-bad`, `proxy-production-good`
 3. `demo-router`
 
-After deploying, the strongest demonstration is to set `workers_dev = false`
-on `app-region-1` and redeploy it. The `good` proxy still works because
-its binding does not need the callee to be public. The `bad` proxy stops
-working because there is no public URL to fetch.
+### Prove it: take the callee off the public internet
+
+The single strongest demonstration of why bindings beat `fetch()` is to
+make `app-region-1` private (no `workers.dev` URL) and watch the two
+proxies diverge: `good` keeps working, `bad` breaks.
+
+```bash
+npm run private:status    # show current workers_dev value for app-region-1
+npm run private:on        # workers_dev = false, then redeploy app-region-1
+curl https://demo-router.<your-subdomain>.workers.dev/ | jq '.summary'
+#   goodSubrequestBilled: false, transport still works
+#   bad side returns an upstream error (no public URL to fetch)
+npm run private:off       # back to workers_dev = true
+```
+
+Two npm scripts (`private:on`, `private:off`) wrap a single Node helper
+at `scripts/toggle-private.mjs` that flips the `workers_dev` line in
+`workers/app-region-1/wrangler.toml` and redeploys just that worker.
+Both scripts are idempotent and print the current state. This is the
+runnable version of the security argument from the meeting notes:
+*"internal workers can be taken off the public internet entirely,
+exposing the endpoint only on the Cloudflare data plane via the
+binding."*
 
 ## Query parameters on the demo
 

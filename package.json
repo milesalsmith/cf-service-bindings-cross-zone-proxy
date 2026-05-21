@@ -11,7 +11,10 @@
     "dev:bad": "npm --workspace workers/proxy-production-bad run dev",
     "dev:good": "npm --workspace workers/proxy-production-good run dev",
     "dev:router": "npm --workspace workers/demo-router run dev",
-    "deploy:all": "npm --workspace workers/app-region-1 run deploy && npm --workspace workers/proxy-production-bad run deploy && npm --workspace workers/proxy-production-good run deploy && npm --workspace workers/demo-router run deploy"
+    "deploy:all": "npm --workspace workers/app-region-1 run deploy && npm --workspace workers/proxy-production-bad run deploy && npm --workspace workers/proxy-production-good run deploy && npm --workspace workers/demo-router run deploy",
+    "private:on": "node scripts/toggle-private.mjs on && npm --workspace workers/app-region-1 run deploy",
+    "private:off": "node scripts/toggle-private.mjs off && npm --workspace workers/app-region-1 run deploy",
+    "private:status": "node scripts/toggle-private.mjs status"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20240725.0",
